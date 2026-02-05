@@ -1,0 +1,90 @@
+RewriteEngine On
+RewriteBase /~dw2t_alexis_josue/GameFest-BackEnd/
+
+# ============================================
+# GAMES (públicos)
+# ============================================
+# GET /api/games -> games/games.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/games/?$ games/games.php [L,QSA]
+
+# GET /api/games/5 -> games/detailGame.php?id=5
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/games/([0-9]+)/?$ games/detailGame.php?id=$1 [L,QSA]
+
+# GET /api/games/search?q=XXX -> games/gameFilter.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/games/search/?$ games/gameFilter.php [L,QSA]
+
+# ============================================
+# EVENTS
+# ============================================
+# GET /api/events?page=1 -> events/events.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/events/?$ events/events.php [L,QSA]
+
+# GET /api/events/5 -> events/detailEvent.php?id=5
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/events/([0-9]+)/?$ events/detailEvent.php?id=$1 [L,QSA]
+
+# POST /api/events/upload-image -> events/upload-image.php
+#RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/events/upload-image/?$ events/upload-image.php [L,QSA]
+
+# POST /api/events (crear evento ADMIN) -> events/createEvent.php
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/events/create?$ events/createEvent.php [L,QSA]
+
+# POST /api/events/5/signup -> events/signup.php?id=5
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/events/([0-9]+)/signup/?$ events/signup.php?id=$1 [L,QSA]
+
+# POST /api/events/5/unsignup
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/events/([0-9]+)/unsignup/?$ events/unsignup.php?id=$1 [L,QSA]
+
+# GET /api/events/filter/available?page=1 -> events/eventsWithSlots.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/events/filter/available/?$ events/eventsWithSlots.php [L,QSA]
+
+# GET /api/events/filter/date?fecha=2026-02-15&page=1 -> events/eventsByDate.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/events/filter/date/?$ events/eventsByDate.php [L,QSA]
+
+# GET /api/events/filter/type?tipo=Competitivo&page=1 -> events/eventsByType.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/events/filter/type/?$ events/eventsByType.php [L,QSA]
+
+# GET /api/events/5/status -> events/status.php?id=5
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/events/([0-9]+)/status/?$ events/status.php?id=$1 [L,QSA]
+# ============================================
+# AUTH (privados con sesiones)
+# ============================================
+
+# Verificar estado de sesión
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/auth/check/?$ auth/check.php [L,QSA]
+
+# POST /api/auth/register -> auth/register.php
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/auth/register/?$ auth/register.php [L,QSA]
+
+# POST /api/auth/login -> auth/login.php
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/auth/login/?$ auth/login.php [L,QSA]
+
+# POST /api/auth/logout -> auth/logout.php
+RewriteCond %{REQUEST_METHOD} POST
+RewriteRule ^api/auth/logout/?$ auth/logout.php [L,QSA]
+
+# ============================================
+# USERS (privados con sesiones)
+# ============================================
+# GET /api/users/me -> users/loggedUser.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/users/me/?$ users/loggedUser.php [L,QSA]
+
+# GET /api/users/me/events -> users/myEvents.php
+RewriteCond %{REQUEST_METHOD} GET
+RewriteRule ^api/users/me/events/?$ users/myEvents.php [L,QSA]

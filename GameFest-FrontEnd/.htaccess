@@ -1,0 +1,8 @@
+RewriteEngine On
+RewriteBase /~dw2t_alexis_josue/GameFest/
+
+# Si no es un archivo real y no es un directorio real,
+# redirige al index.html
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.html [L]

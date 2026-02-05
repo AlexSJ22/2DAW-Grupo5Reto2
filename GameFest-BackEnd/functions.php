@@ -1,0 +1,751 @@
+<?php
+define("SERVIDOR", getenv("DB_HOST") ?: "localhost");
+define("BBDD", getenv("DB_NAME") ?: "dw2t_alexis_josue");
+define("USUARIO", getenv("DB_USER") ?: "dw2t_alexis_josue");
+define("CLAVE", getenv("DB_PASS") ?: "12345");
+
+/**
+ * Metodo para realizar la conexion a la base de datos
+ * @return mysqli
+ */
+function conectarBD()
+{
+    $mysqli = new mysqli(SERVIDOR, USUARIO, CLAVE, BBDD);
+    $mysqli->set_charset('utf8');
+    if ($mysqli->connect_errno) {
+        print ("Error de conexion " . $mysqli->connect_error);
+    }
+    return $mysqli;
+}
+
+/**
+ * Metodo para devolver un json 
+ * @param mixed $data con los datos pasados por parametro
+ * @param mixed $codigo --> codigo http para respuesta de la pagina
+ */
+function enviarJSON($data, $codigo = 200)
+{
+    http_response_code($codigo);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    exit();
+}
+
+/*======================================================================================
+ * Gestion sesiones - registro, inicio de sesion, etc
+ ====================================================================================== */
+
+/**
+ * SMetodo para iniciar sesion en la pagina
+ * Con session
+ */
+function iniciarSesion()
+{
+    if (session_status() == PHP_SESSION_NONE) {
+        session_start();
+    }
+}
+
+/**
+ * Metodo para cerrar sesion en la pagina 
+ * @return array{message: string, success: bool} Devuelve un mensaje de confirmacion
+ * Destruye la session
+ */
+function logout()
+{
+    iniciarSesion();
+    session_destroy();
+    return ["success" => true, "message" => "Sesión cerrada"];
+}
+
+/**
+ * Metodo para verificar si el usuario esta autenticado en la sesion actual
+ * @return bool Devuelve true si hay un usuario autenticado, false si no
+ */
+function estaAutenticado()
+{
+    iniciarSesion();
+    return isset($_SESSION['user_id']);
+}
+
+/**
+ * Comprueba si el usuario actual es admin
+ * @return bool Devuelve true|false si el usuario es admin
+ */
+function esAdmin()
+{
+    iniciarSesion();
+    return isset($_SESSION["rol"]) && strtoupper($_SESSION['rol']) === 'ADMIN';
+}
+
+/**
+ * Obtiene el id del usuario logeado
+ * @return int|null Devuelve el ID del usuario o null si no hay sesion
+ */
+function obtenerUsuarioActual()
+{
+    iniciarSesion();
+    return $_SESSION['user_id'] ?? null;
+}
+
+/*======================================================================================
+ * Gestion usuario - registro, inicio de sesion, etc
+ ====================================================================================== */
+
+/**
+ * Comprueba si un email ya esta vinculado en una base de datos
+ * @param mixed $mysqli Se proporciona la conexion a la base de datos
+ * @param mixed $email Email a comprobar
+ * @return bool Devuelve true si el email existe
+ */
+function emailExiste($mysqli, $email)
+{
+    $stmt = $mysqli->prepare("SELECT id from users WHERE email=?;");
+    $stmt->bind_param("s", $email);
+    $stmt->execute();
+    return $stmt->get_result()->num_rows > 0;
+}
+
+/**
+ * Comprueba si un nombre de usuario existe en la base datos
+ * @param mixed $mysqli Se proporciona la conexion a la base de datos
+ * @param mixed $username Nombre de usuario a comprobar
+ * @return bool Devuelve true si el usuario existe
+ */
+function usernameExiste($mysqli, $username)
+{
+    $stmt = $mysqli->prepare("SELECT id from users WHERE username=?;");
+    $stmt->bind_param("s", $username);
+    $stmt->execute();
+    return $stmt->get_result()->num_rows > 0;
+}
+
+/**
+ * Metodo para registrar un usuario en la base de datos
+ * @param mixed $username Se proporciona la conexion a la base de datos
+ * @param mixed $email el email
+ * @param mixed $password y la contrasena
+ */
+function registrarUsuario($username, $email, $password)
+{
+    $mysqli = conectarBD();
+    try {
+        if (strlen($username) < 3) {
+            return ["success" => false, "message" => "El nombre de usuario debe tener al menos 3 caracteres"];
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ["success" => false, "message" => "El email no es válido"];
+        }
+
+        if (strlen($password) < 6) {
+            return ["success" => false, "message" => "La contraseña debe tener al menos 6 caracteres"];
+        }
+
+        if (emailExiste($mysqli, $email)) {
+            return ["success" => false, "message" => "El email ya esta registrado"];
+        }
+
+        if (usernameExiste($mysqli, $username)) {
+            return ["success" => false, "message" => "El nombre de usuario ya esta registrado"];
+        }
+
+        $hash = password_hash($password, PASSWORD_BCRYPT);
+        $stmt = $mysqli->prepare("INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, 'USER')");
+        $stmt->bind_param("sss", $username, $email, $hash);
+
+        if ($stmt->execute()) {
+            return ["success" => true, "message" => "Usuario registrado correctamente"];
+        } else {
+            return ["success" => false, "message" => "No se pudo registrar el usuario"];
+        }
+    } catch (Exception $e) {
+        return ["success" => false, "message" => "Error: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo para autenticar el usuario mediante el email y la contrasena
+ * @param mixed $email Email del usuario 
+ * @param mixed $pass Contrasena del usuario
+ * @return array{message: string, success: bool, user: array{email: mixed, id: mixed, role: mixed, username: mixed}|array{message: string, success: bool}}
+ * Devuelve el resultado del inicio de sesion
+ */
+function loginUsuario($email, $pass)
+{
+    $mysqli = conectarBD();
+    try {
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ["success" => false, "message" => "Email no válido"];
+        }
+
+        $stmt = $mysqli->prepare("SELECT id,username,email,password_hash,role FROM `users` WHERE email=?;");
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        if ($result->num_rows === 0) {
+            return ["success" => false, "message" => "Credenciales incorrectas"];
+        }
+
+        $user = $result->fetch_assoc();
+        if (password_verify($pass, $user['password_hash'])) {
+            iniciarSesion();
+            $_SESSION['user_id'] = $user['id'];
+            $_SESSION['username'] = $user['username'];
+            $_SESSION['email'] = $user['email'];
+            $_SESSION['rol'] = $user['role'];
+
+            return [
+                "success" => true,
+                "message" => "Inicio de sesión exitoso",
+                "user" => [
+                    "id" => $user['id'],
+                    "username" => $user['username'],
+                    "email" => $user['email'],
+                    "role" => $user['role']
+                ]
+            ];
+        } else {
+            return ["success" => false, "message" => "Credenciales incorrectas"];
+        }
+
+    } catch (Exception $e) {
+        return ["success" => false, "message" => "Error: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/*======================================================================================
+ * Gestion eventos 
+ ====================================================================================== */
+/**
+ * Metodo para crear un nuevo evento en la base de datos,
+ * que solo puede ser creado por un administrador
+ * @param mixed $title Se proporciona un titulo
+ * @param mixed $type Se proporciona un tipo
+ * @param mixed $date Se proporciona una fecha
+ * @param mixed $hour Se proporciona una hora
+ * @param mixed $slots Se proporciona las plazas
+ * @param mixed $image Se proporciona una imagen
+ * @param mixed $desc Y se proporciona una descripcion 
+ * @return array{id: int|string, message: string, success: bool|array{message: string, success: bool}}
+ * Devuelve el resultado de la creacion del evento
+ */
+function crearEvento($title, $type, $date, $hour, $slots, $image, $desc)
+{
+    if (!esAdmin()) {
+        return ["success" => false, "message" => "No eres admin, no puedes crear un evento"];
+    }
+
+    // Validaciones
+    if (empty($title) || empty($type) || empty($date) || empty($hour) || empty($desc)) {
+        return ["success" => false, "message" => "Todos los campos son requeridos"];
+    }
+
+    if ($slots < 0) {
+        return ["success" => false, "message" => "Las plazas no pueden ser negativas"];
+    }
+
+    $mysqli = conectarBD();
+    try {
+        $stmt = $mysqli->prepare("INSERT INTO events (titulo, tipo, fecha, hora, plazasLibres, imagen, descripcion) VALUES (?, ?, ?, ?, ?, ?, ?);");
+        $slots = (int) $slots;
+
+        $stmt->bind_param("ssssiss", $title, $type, $date, $hour, $slots, $image, $desc);
+
+        if ($stmt->execute()) {
+            return ["success" => true, "message" => "Evento creado correctamente", "id" => $mysqli->insert_id];
+        } else {
+            return ["success" => false, "message" => "No se pudo crear el evento"];
+        }
+    } catch (Exception $e) {
+        return ["success" => false, "message" => "Error: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo que verifica si un usuario esta incrito en un evento 
+ * @param mixed $eventId Se proporciona un id del evento 
+ * @param mixed $userId Y el id del usuario
+ * @return bool Devuelve true|false si el usuario esta incrito o no
+ */
+function verificarInscrito($eventId, $userId = null)
+{
+    if ($userId === null) {
+        $userId = obtenerUsuarioActual();
+    }
+
+    if (!$userId) {
+        return false;
+    }
+
+    $mysqli = conectarBD();
+
+    try {
+        $stmt = $mysqli->prepare("SELECT user_id FROM user_events WHERE user_id = ? AND event_id = ?");
+        $stmt->bind_param("ii", $userId, $eventId);
+        $stmt->execute();
+        $result = $stmt->get_result()->num_rows > 0;
+        return $result;
+    } catch (Exception $e) {
+        return false;
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo para incribir al usuario a un evento
+ * @param mixed $eventId Se proporciona el id del evento
+ * @return array{message: string, success: bool} Devuelve el resultado de la inscripcion
+ */
+function inscribirse($eventId)
+{
+    if (!estaAutenticado()) {
+        return ["success" => false, "message" => "Debes iniciar sesión"];
+    }
+
+    $userId = obtenerUsuarioActual();
+    $mysqli = conectarBD();
+
+    try {
+        if (verificarInscrito($eventId, $userId)) {
+            return ["success" => false, "message" => "Ya estás inscrito en este evento"];
+        }
+
+        $stmt = $mysqli->prepare("SELECT plazasLibres FROM events WHERE id = ?");
+        $stmt->bind_param("i", $eventId);
+        $stmt->execute();
+        $evento = $stmt->get_result()->fetch_assoc();
+
+        if (!$evento) {
+            return ["success" => false, "message" => "Evento no encontrado"];
+        }
+
+        if ($evento['plazasLibres'] <= 0) {
+            return ["success" => false, "message" => "No hay plazas disponibles"];
+        }
+
+        $mysqli->begin_transaction();
+
+        $stmt = $mysqli->prepare("INSERT INTO user_events (user_id, event_id) VALUES (?, ?)");
+        $stmt->bind_param("ii", $userId, $eventId);
+        $stmt->execute();
+
+        $stmt = $mysqli->prepare("UPDATE events SET plazasLibres = plazasLibres - 1 WHERE id = ?");
+        $stmt->bind_param("i", $eventId);
+        $stmt->execute();
+
+        $mysqli->commit();
+
+        return ["success" => true, "message" => "Te has inscrito correctamente"];
+
+    } catch (Exception $e) {
+        $mysqli->rollback();
+        return ["success" => false, "message" => "Error: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo para desincribir al usuario actual de un evento
+ * @param mixed $eventId Se proporciona el id del evento
+ * @return array{message: string, success: bool} Devuelve el resultado de la inscripcion
+ */
+function desinscribirse($eventId)
+{
+    if (!estaAutenticado()) {
+        return ["success" => false, "message" => "Debes iniciar sesión"];
+    }
+
+    $userId = obtenerUsuarioActual();
+    $mysqli = conectarBD();
+
+    try {
+        if (!verificarInscrito($eventId, $userId)) {
+            return ["success" => false, "message" => "No estás inscrito en este evento"];
+        }
+
+        $mysqli->begin_transaction();
+
+        $stmt = $mysqli->prepare("DELETE FROM user_events WHERE user_id = ? AND event_id = ?");
+        $stmt->bind_param("ii", $userId, $eventId);
+        $stmt->execute();
+
+        $stmt = $mysqli->prepare("UPDATE events SET plazasLibres = plazasLibres + 1 WHERE id = ?");
+        $stmt->bind_param("i", $eventId);
+        $stmt->execute();
+
+        $mysqli->commit();
+
+        return ["success" => true, "message" => "Te has desinscrito correctamente"];
+
+    } catch (Exception $e) {
+        $mysqli->rollback();
+        return ["success" => false, "message" => "Error: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/*======================================================================================
+ * Obtencion de datos - eventos, juegos, etc
+ ======================================================================================
+ */
+
+/**
+ * Metodo para obtener todos los eventos del usuario
+ * @param mixed $userId (Opcional) Se proporciona el id del usuario
+ * @return array{eventos: array, success: bool|array{message: string, success: bool}}
+ * Devuelve los eventos del usuario
+ */
+function obtenerMisEventos($userId = null)
+{
+    if (!estaAutenticado()) {
+        return ["success" => false, "message" => "Debes iniciar sesión"];
+    }
+
+    if ($userId === null) {
+        $userId = obtenerUsuarioActual();
+    }
+
+    $mysqli = conectarBD();
+    try {
+        // FIXED: Added e.tipo and e.plazasLibres to the SELECT
+        $stmt = $mysqli->prepare("SELECT e.id, e.titulo, e.tipo, e.fecha, e.hora, e.plazasLibres, e.imagen, e.descripcion FROM events e JOIN user_events ue ON ue.event_id = e.id WHERE ue.user_id = ?;");
+        $stmt->bind_param("i", $userId);
+        $stmt->execute();
+        $events = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        return ["success" => true, "eventos" => $events];
+    } catch (Exception $e) {
+        return ["success" => false, "message" => "Error: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo para obtener uno o varios juegos
+ * @param mixed $id (Opcional) Se proporciona la id del juego
+ * Retorna todos los juegos o un solo juego
+ */
+function obtenerJuegos($id = null)
+{
+    $mysqli = conectarBD();
+    $juegos = [];
+
+    try {
+        if ($id) {
+            $stmt = $mysqli->prepare("SELECT * FROM games WHERE id = ?;");
+            $stmt->bind_param('i', $id);
+        } else {
+            $stmt = $mysqli->prepare("SELECT * from games");
+        }
+        $stmt->execute();
+        $resultado = $stmt->get_result();
+        $juegos = $resultado->fetch_all(MYSQLI_ASSOC);
+
+        foreach ($juegos as &$juego) {
+            if (isset($juego['plataformas'])) {
+                $juego['plataformas'] = json_decode($juego['plataformas'], true);
+            }
+        }
+
+        if ($id && count($juegos) > 0) {
+            return $juegos[0];
+        }
+
+        return $juegos;
+
+    } catch (Exception $e) {
+        return ["error" => "Error en obtener juegos: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Super Función: Obtiene eventos por ID, o listados (con o sin filtros)
+ * @param int $page Número de página para la paginación
+ * @param int|null $id ID del evento (si se pasa, ignora el resto y devuelve solo ese)
+ * @param string|null $tipo Filtro por tipo
+ * @param string|null $fecha Filtro por fecha
+ * @param bool|int|string $soloPlazas Filtro para ver solo disponibles
+ */
+function obtenerEventos($page = 1, $id = null, $tipo = null, $fecha = null, $soloPlazas = null)
+{
+    $mysqli = conectarBD();
+
+    try {
+        // --- CASO 1: OBTENER UN SOLO EVENTO POR ID ---
+        if ($id) {
+            $stmt = $mysqli->prepare("SELECT * FROM events WHERE id = ?");
+            $stmt->bind_param("i", $id);
+            $stmt->execute();
+            $evento = $stmt->get_result()->fetch_assoc();
+
+            if (estaAutenticado() && $evento) {
+                $evento['inscrito'] = verificarInscrito($id);
+            }
+            return $evento; // Retorna solo el objeto evento
+        }
+
+        // --- CASO 2: LISTADO DE EVENTOS (CON O SIN FILTROS) ---
+
+        $limit = 9;
+        $offset = ($page - 1) * $limit;
+
+        // 1. Construcción dinámica de condiciones (WHERE)
+        $condiciones = [];
+        $params = [];
+        $tiposStr = "";
+
+        if (!empty($tipo)) {
+            $condiciones[] = "tipo = ?";
+            $params[] = $tipo;
+            $tiposStr .= "s";
+        }
+
+        if (!empty($fecha)) {
+            $condiciones[] = "fecha = ?";
+            $params[] = $fecha;
+            $tiposStr .= "s";
+        }
+
+        if ($soloPlazas === 'true' || $soloPlazas === true || $soloPlazas == 1) {
+            $condiciones[] = "plazasLibres > 0";
+        }
+
+        // Unimos las condiciones con AND
+        $whereSQL = "";
+        if (count($condiciones) > 0) {
+            $whereSQL = " WHERE " . implode(" AND ", $condiciones);
+        }
+
+        // 2. Consulta de TOTAL (Para la paginación)
+        $sqlCount = "SELECT COUNT(*) as total FROM events" . $whereSQL;
+        $stmtCount = $mysqli->prepare($sqlCount);
+
+        if (!empty($params)) {
+            $stmtCount->bind_param($tiposStr, ...$params);
+        }
+        $stmtCount->execute();
+        $total = $stmtCount->get_result()->fetch_assoc()['total'];
+        $stmtCount->close();
+
+        // 3. Consulta de DATOS
+        $sqlData = "SELECT id, titulo, tipo, fecha, hora, plazasLibres, imagen, descripcion 
+                    FROM events" . $whereSQL . " 
+                    ORDER BY fecha ASC, hora ASC 
+                    LIMIT ? OFFSET ?";
+
+        $stmtData = $mysqli->prepare($sqlData);
+
+        // Añadimos limit y offset a los parámetros
+        $paramsData = $params;
+        $paramsData[] = $limit;
+        $paramsData[] = $offset;
+        $tiposData = $tiposStr . "ii";
+
+        $stmtData->bind_param($tiposData, ...$paramsData);
+        $stmtData->execute();
+        $eventos = $stmtData->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        // Verificar inscripciones si es usuario
+        if (estaAutenticado()) {
+            foreach ($eventos as &$eventoItem) {
+                $eventoItem['inscrito'] = verificarInscrito($eventoItem['id']);
+            }
+        }
+
+        return ["total" => $total, "eventos" => $eventos];
+
+    } catch (Exception $e) {
+        return ["error" => "Error al obtener eventos: " . $e->getMessage()];
+    } finally {
+        if (isset($mysqli))
+            $mysqli->close();
+    }
+}
+
+/*======================================================================================
+ * Funciones de filtrado
+ ======================================================================================*/
+
+/**
+ * Metodo para obtener los eventos con plazas libres de forma paginada
+ * @param mixed $page (Opcional) Se proporciona el numero de la pagina
+ * @return array|array{error: string} Devuelve un array con plazas libres
+ */
+function mostrarEventosConPlazasLibres($page = 1)
+{
+    $mysqli = conectarBD();
+
+    try {
+        $limit = 9;
+        $offset = ($page - 1) * $limit;
+
+        $totalResult = $mysqli->query(
+            "SELECT COUNT(*) as total FROM events WHERE plazasLibres > 0"
+        );
+        $total = $totalResult->fetch_assoc()['total'];
+
+        $stmt = $mysqli->prepare("
+            SELECT id, titulo, tipo, fecha, hora, plazasLibres, imagen, descripcion 
+            FROM events 
+            WHERE plazasLibres > 0 
+            ORDER BY fecha ASC 
+            LIMIT ? OFFSET ?
+        ");
+        $stmt->bind_param("ii", $limit, $offset);
+        $stmt->execute();
+        $eventos = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        if (estaAutenticado()) {
+            foreach ($eventos as &$evento) {
+                $evento['inscrito'] = verificarInscrito($evento['id']);
+            }
+        }
+
+        return ["total" => $total, "eventos" => $eventos];
+
+    } catch (Exception $e) {
+        return ["error" => "Error al obtener eventos: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Obtiene los eventos filtrados por fecha
+ * @param mixed $fecha Se proporciona la fecha del evento
+ * @param mixed $page (Opcional) Se proporciona el numero de la pagina
+ * @return array|array{error: string} Devuelve un array de los eventos filtrados
+ */
+function mostrarEventosPorFecha($fecha, $page = 1)
+{
+    $mysqli = conectarBD();
+
+    try {
+        $limit = 9;
+        $offset = ($page - 1) * $limit;
+
+        $totalResult = $mysqli->prepare(
+            "SELECT COUNT(*) as total FROM events WHERE fecha =?;"
+        );
+        $totalResult->bind_param("s", $fecha);
+        $totalResult->execute();
+        $total = $totalResult->get_result()->fetch_assoc()['total'];
+
+        $stmt = $mysqli->prepare("SELECT id, titulo, tipo, fecha, hora, plazasLibres, imagen, descripcion FROM events WHERE fecha = ? ORDER BY hora ASC LIMIT ? OFFSET ?;");
+        $stmt->bind_param("sii", $fecha, $limit, $offset);
+        $stmt->execute();
+        $eventos = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        if (estaAutenticado()) {
+            foreach ($eventos as &$evento) {
+                $evento['inscrito'] = verificarInscrito($evento['id']);
+            }
+        }
+
+        return ["total" => $total, "eventos" => $eventos];
+
+    } catch (Exception $e) {
+        return ["error" => "Error al obtener eventos: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo para mostrar los eventos filtrados por tipo
+ * @param mixed $tipo Se proporciona el tipo del evento
+ * @param mixed $page (Opcional) Se proporciona el numero de la pagina
+ * @return array|array{error: string} Devuelve un array con los eventos filtrados
+ */
+function mostrarEventosPorTipo($tipo, $page = 1)
+{
+    $mysqli = conectarBD();
+
+    try {
+        $limit = 9;
+        $offset = ($page - 1) * $limit;
+
+        $totalResult = $mysqli->prepare(
+            "SELECT COUNT(*) as total FROM events WHERE tipo =?;"
+        );
+        $totalResult->bind_param("s", $tipo);
+        $totalResult->execute();
+        $total = $totalResult->get_result()->fetch_assoc()['total'];
+
+        $stmt = $mysqli->prepare("SELECT id, titulo, tipo, fecha, hora, plazasLibres, imagen, descripcion FROM events WHERE tipo = ? ORDER BY fecha ASC, hora ASC LIMIT ? OFFSET ?;");
+        $stmt->bind_param("sii", $tipo, $limit, $offset);
+        $stmt->execute();
+        $eventos = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        if (estaAutenticado()) {
+            foreach ($eventos as &$evento) {
+                $evento['inscrito'] = verificarInscrito($evento['id']);
+            }
+        }
+
+        return ["total" => $total, "eventos" => $eventos];
+
+    } catch (Exception $e) {
+        return ["error" => "Error al obtener eventos: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+
+/**
+ * Metodo para buscar un juego globalmente plataforma, genero y titulo
+ * @param mixed $busqueda   Se le pasa el valor de la busqueda
+ * @return array|array{error: string}
+ */
+function buscarJuegos($busqueda)
+{
+    $mysqli = conectarBD();
+    try {
+        $busqueda = trim($busqueda);
+
+        if ($busqueda === '') {
+            $stmt = $mysqli->prepare("SELECT id, titulo, genero, plataformas, imagen, descripcion FROM games");
+            $stmt->execute();
+        } else {
+            $query = "
+                SELECT id, titulo, genero, plataformas, imagen, descripcion
+                FROM games
+                WHERE LOWER(titulo) LIKE CONCAT('%', LOWER(?), '%')
+                   OR LOWER(genero) LIKE CONCAT('%', LOWER(?), '%')
+                   OR JSON_SEARCH(LOWER(plataformas), 'one', LOWER(?), NULL, '$') IS NOT NULL
+            ";
+            $stmt = $mysqli->prepare($query);
+            $stmt->bind_param("sss", $busqueda, $busqueda, $busqueda);
+            $stmt->execute();
+        }
+
+        $resultado = $stmt->get_result();
+        $juegos = $resultado->fetch_all(MYSQLI_ASSOC);
+
+        foreach ($juegos as &$juego) {
+            if (isset($juego['plataformas'])) {
+                $juego['plataformas'] = json_decode($juego['plataformas'], true);
+            }
+        }
+
+        return $juegos;
+    } catch (Exception $e) {
+        return ["error" => "Error al buscar juegos: " . $e->getMessage()];
+    } finally {
+        $mysqli->close();
+    }
+}
+?>
