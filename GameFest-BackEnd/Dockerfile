@@ -14,6 +14,7 @@ RUN sed -i 's|RewriteBase /~dw2t_alexis_josue/GameFest-BackEnd/|RewriteBase /|g'
 
 # Copy and set entrypoint
 COPY entrypoint.sh /usr/local/bin/
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Set permissions
